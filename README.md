@@ -1,8 +1,13 @@
 # go-vfs
+
+[![codecov](https://codecov.io/gh/lazychanger/go-vfs/branch/master/graph/badge.svg?token=GUBD053ODP)](https://codecov.io/gh/lazychanger/go-vfs)
+[![Go](https://img.shields.io/badge/go-1.18-blue.svg)](https://golang.org/doc/install)
+[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+
+
 virtual file system for go
 
-## Tips
-This project is not finished yet. Do not use in production environment
 
 ## How to use
 
@@ -36,5 +41,4 @@ func main() {
 
 ## Features
 
-- [ ] go test cover 100%
 - [ ] more filesystem driver. eg. s3, etcd
