@@ -2,3 +2,5 @@
 vendor
 runtime
 build
+
+/tmp*

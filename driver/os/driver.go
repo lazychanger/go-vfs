@@ -16,7 +16,7 @@ type osDriver struct {
 
 // Open opens a file using the given path
 func (o *osDriver) Open(uri *url.URL) (filesystem.FileSystem, error) {
-	return &FileSystem{
-		config: &Config{Root: uri.Host},
-	}, nil
+	return New(&Config{
+		Root: uri.Path,
+	})
 }

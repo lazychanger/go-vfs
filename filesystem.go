@@ -10,8 +10,10 @@ import (
 
 type FileSystem interface {
 
-	// Open opens the named file for reading. If successful, methods on
+	// Open opens the named file for reading.
+	// if file not exist, the error is os.ErrNotExist.
 	Open(name string) (File, error)
+
 	// Create creates the named file with mode 0666 (before umask), truncating
 	// it if it already exists. If successful, methods on the returned
 	// File can be used for writing; the associated file descriptor has
@@ -54,6 +56,15 @@ type FileSystem interface {
 
 	// Stat returns a FileInfo describing the named file.
 	Stat(name string) (os.FileInfo, error)
+
+	// Exists checks if the file exists
+	Exists(name string) bool
+
+	// IsFile returns true if the given path is a file
+	IsFile(name string) bool
+
+	// IsDir returns true if the given path is a directory
+	IsDir(name string) bool
 }
 
 type File interface {
@@ -64,7 +75,7 @@ type File interface {
 type ReadDirFS interface {
 	FileSystem
 	// ReadDir see fs.ReadDirFS
-	ReadDir(name string) ([]os.DirEntry, error)
+	ReadDir(name string) ([]fs.DirEntry, error)
 }
 
 type ReadDirFile interface {
@@ -172,5 +183,5 @@ func OpenFile(vfs FileSystem, name string) (File, error) {
 		return vfs.OpenFile(name)
 	}
 
-	return vfs.Create(name)
+	return vfs.Open(name)
 }

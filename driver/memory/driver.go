@@ -16,9 +16,7 @@ type fsDriver struct {
 
 func (m *fsDriver) Open(uri *url.URL) (filesystem.FileSystem, error) {
 	conf := &Config{}
-	if err := conf.Decode(uri.Query()); err != nil {
-		return nil, err
-	}
+	_ = conf.Decode(uri.Query())
 
 	return New(conf, "/"), nil
 

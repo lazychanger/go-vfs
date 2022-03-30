@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"errors"
 	"github.com/lazychanger/filesystem"
+	"io"
 	"io/fs"
 	"path"
 	"strings"
@@ -21,19 +23,51 @@ type memFs struct {
 	files map[string]*memFile
 	dirs  map[string]*memFs
 
-	fi fs.FileInfo
+	fi *memFileInfo
 
 	sync.RWMutex
 }
 
+func (m *memFs) ReadDir(name string) ([]fs.DirEntry, error) {
+	dirs := make([]fs.DirEntry, 0)
+
+	node, exist := m.node(name, false)
+	if !exist || len(node.dirs) == 0 {
+		return dirs, io.EOF
+	}
+
+	node.RLock()
+	defer node.RUnlock()
+
+	for _, file := range node.files {
+		dirs = append(dirs, &memDirEntry{
+			fi: file.fi,
+		})
+	}
+
+	for _, dir := range node.dirs {
+		dirs = append(dirs, &memDirEntry{
+			fi: dir.fi,
+		})
+	}
+
+	return dirs, nil
+}
+
 func New(config *Config, root string) filesystem.FileSystem {
+	if config == nil {
+		config = &Config{}
+	}
+
+	_, name := dirname(root)
+
 	return &memFs{
 		root:   strings.TrimRight(root, "/") + "/",
 		config: config,
 		files:  make(map[string]*memFile),
 		dirs:   make(map[string]*memFs),
 		fi: &memFileInfo{
-			name:  "",
+			name:  name,
 			size:  0,
 			isDir: true,
 			ctime: time.Now(),
@@ -42,36 +76,35 @@ func New(config *Config, root string) filesystem.FileSystem {
 }
 
 func (m *memFs) Open(name string) (filesystem.File, error) {
-	dir, fname := m.path(name)
+	dir, fname := dirname(name)
 
 	node, exist := m.node(dir, false)
 	if !exist {
-		return nil, &fs.PathError{Op: "open", Path: path.Join(m.root, fname), Err: fs.ErrNotExist}
+		return nil, &fs.PathError{Op: "open", Path: pathjoin(m.root, name), Err: fs.ErrNotExist}
 	}
+
 	return node.open(fname)
 }
 
 func (m *memFs) open(name string) (filesystem.File, error) {
 	m.RLock()
 	defer m.RUnlock()
-
 	if f, ok := m.files[name]; ok {
 		return f, nil
 	}
-
-	return nil, &fs.PathError{Op: "open", Path: path.Join(m.root, name), Err: fs.ErrNotExist}
+	return nil, &fs.PathError{Op: "open", Path: pathjoin(m.root, name), Err: fs.ErrNotExist}
 }
 
 func (m *memFs) Create(name string) (filesystem.File, error) {
-	dir, fname := m.path(name)
+	dir, fname := dirname(name)
 
 	node, exist := m.node(dir, false)
 	if !exist {
-		return nil, &fs.PathError{Op: "open", Path: m.root, Err: fs.ErrNotExist}
+		return nil, &fs.PathError{Op: "open", Path: pathjoin(m.root, name), Err: fs.ErrNotExist}
 	}
 
-	if !m.existFile(name) {
-		return nil, &fs.PathError{Op: "open", Path: path.Join(m.root, fname), Err: fs.ErrExist}
+	if f := node.getFile(fname); f != nil {
+		return f, nil
 	}
 
 	return node.create(fname, nil)
@@ -82,6 +115,8 @@ func (m *memFs) create(name string, f *memFile) (filesystem.File, error) {
 	defer m.Unlock()
 
 	if f != nil {
+		f.fi.name = name
+		f.fi.ctime = time.Now()
 		m.files[name] = f
 	} else {
 		m.files[name] = newMemFile(name, nil, false)
@@ -91,14 +126,14 @@ func (m *memFs) create(name string, f *memFile) (filesystem.File, error) {
 }
 
 func (m *memFs) Mkdir(name string, perm fs.FileMode) error {
-	dir, dirname := m.path(name)
+	dir, dname := dirname(name)
 
 	node, exist := m.node(dir, false)
 	if !exist {
-		return &fs.PathError{Op: "mkdir", Path: path.Join(m.root, dirname), Err: fs.ErrNotExist}
+		return &fs.PathError{Op: "mkdir", Path: pathjoin(m.root, name), Err: fs.ErrNotExist}
 	}
 
-	return node.mkdir(dirname)
+	return node.mkdir(dname)
 }
 
 func (m *memFs) mkdir(name string) (err error) {
@@ -106,7 +141,7 @@ func (m *memFs) mkdir(name string) (err error) {
 	defer m.Unlock()
 
 	if _, ok := m.dirs[name]; ok {
-		return &fs.PathError{Op: "mkdir", Path: path.Join(m.root, name), Err: fs.ErrExist}
+		return &fs.PathError{Op: "mkdir", Path: pathjoin(m.root, name), Err: fs.ErrExist}
 	}
 
 	m.dirs[name] = New(m.config, m.root+name+"/").(*memFs)
@@ -120,14 +155,26 @@ func (m *memFs) MkdirAll(path string, perm fs.FileMode) error {
 }
 
 func (m *memFs) Remove(name string) error {
-	dir, fname := m.path(name)
+	dir, fname := dirname(name)
 
 	node, exist := m.node(dir, false)
+
 	if !exist {
-		return &fs.PathError{Op: "removeFile", Path: path.Join(m.root, fname), Err: fs.ErrNotExist}
+		return &fs.PathError{Op: "removeFile", Path: pathjoin(m.root, name), Err: fs.ErrNotExist}
 	}
 
-	if _, err := node.removeFile(fname); err != nil {
+	if strings.HasSuffix(name, "/") {
+		if _, err := node.removeDir(fname); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if _, err := node.removeFile(fname); err == nil {
+		return nil
+	}
+
+	if _, err := node.removeDir(fname); err != nil {
 		return err
 	}
 
@@ -142,23 +189,37 @@ func (m *memFs) removeFile(name string) (*memFile, error) {
 		delete(m.files, name)
 		return f, nil
 	}
-
-	return nil, &fs.PathError{Op: "removeFile", Path: path.Join(m.root, name), Err: fs.ErrNotExist}
+	return nil, &fs.PathError{Op: "removeFile", Path: pathjoin(m.root, name), Err: fs.ErrNotExist}
 }
 
 func (m *memFs) RemoveAll(path string) error {
-	dir, fname := m.path(path)
+	if path == "/" {
+		m.Lock()
+		defer m.Unlock()
+
+		m.files = make(map[string]*memFile)
+		m.dirs = make(map[string]*memFs)
+		m.size = 0
+		return nil
+	}
+
+	dir, fname := dirname(path)
 
 	node, exist := m.node(dir, false)
 	if !exist {
 		return nil
 	}
 
-	_, _ = node.removeFile(fname)
-
-	if _, err := node.removeDir(fname); err != nil {
-		return err
+	if strings.HasSuffix(path, "/") {
+		_, _ = node.removeDir(fname)
+		return nil
 	}
+
+	if _, err := node.removeFile(fname); err == nil {
+		return nil
+	}
+
+	_, _ = node.removeDir(fname)
 
 	return nil
 }
@@ -173,36 +234,48 @@ func (m *memFs) removeDir(name string) (*memFs, error) {
 		return dir, nil
 	}
 
-	return nil, &fs.PathError{Op: "removeDir", Path: path.Join(m.root, name), Err: fs.ErrNotExist}
+	return nil, &fs.PathError{Op: "removeDir", Path: pathjoin(m.root, name), Err: fs.ErrNotExist}
 }
 
 func (m *memFs) Rename(oldpath, newpath string) error {
-	renameFileErr := m.renameFile(oldpath, newpath)
-
-	renameDirErr := m.renameDir(oldpath, newpath)
-
-	if renameFileErr != nil && renameDirErr != nil {
-		return renameDirErr
+	if strings.HasSuffix(oldpath, "/") {
+		if err := m.renameDir(oldpath, newpath); err != nil {
+			return err
+		}
+		return nil
 	}
+
+	if err := m.renameFile(oldpath, newpath); err == nil {
+		return nil
+	}
+
+	if err := m.renameDir(oldpath, newpath); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func (m *memFs) Sub(name string) (filesystem.FileSystem, error) {
+func (m *memFs) Sub(dir string) (filesystem.FileSystem, error) {
+	if dir == "." || dir == ".." {
+		return nil, errors.New("invalid sub directory")
+	}
 
-	node, exist := m.node(name, false)
+	node, exist := m.node(dir, false)
+
 	if !exist {
-		return nil, &fs.PathError{Op: "sub", Path: path.Join(node.root), Err: fs.ErrNotExist}
+		return nil, &fs.PathError{Op: "sub", Path: pathjoin(m.root, dir), Err: fs.ErrNotExist}
 	}
 
 	return node, nil
 }
 
 func (m *memFs) Stat(name string) (fs.FileInfo, error) {
-	dir, fname := m.path(name)
+	dir, fname := dirname(name)
 
 	node, exist := m.node(dir, false)
 	if !exist {
-		return nil, &fs.PathError{Op: "Stat", Path: path.Join(node.root), Err: fs.ErrNotExist}
+		return nil, &fs.PathError{Op: "Stat", Path: pathjoin(m.root, name), Err: fs.ErrNotExist}
 	}
 
 	if node.existFile(fname) {
@@ -213,23 +286,60 @@ func (m *memFs) Stat(name string) (fs.FileInfo, error) {
 		return node.dirs[fname].fi, nil
 	}
 
-	return nil, &fs.PathError{Op: "Stat", Path: path.Join(node.root, fname), Err: fs.ErrNotExist}
+	return nil, &fs.PathError{Op: "Stat", Path: pathjoin(m.root, name), Err: fs.ErrNotExist}
+}
+
+func (m *memFs) Exists(name string) bool {
+	dir, fname := dirname(name)
+
+	node, exist := m.node(dir, false)
+
+	if !exist {
+		return false
+	}
+
+	if node.existFile(fname) || node.existDir(fname) {
+		return true
+	}
+
+	return false
+}
+
+func (m *memFs) IsFile(name string) bool {
+	dir, fname := dirname(name)
+
+	node, exist := m.node(dir, false)
+	if !exist {
+		return false
+	}
+
+	return node.existFile(fname)
+}
+
+func (m *memFs) IsDir(name string) bool {
+	dir, fname := dirname(name)
+
+	node, exist := m.node(dir, false)
+	if !exist {
+		return false
+	}
+
+	return node.existDir(fname)
 }
 
 func (m *memFs) renameFile(oldpath, newpath string) error {
-	olddir, oldname := m.path(oldpath)
+	olddir, oldname := dirname(oldpath)
+	onode, oexist := m.node(olddir, false)
 
-	onode, exist := m.node(olddir, false)
-	if !exist {
-		return &fs.PathError{Op: "renameFile", Path: path.Join(oldpath), Err: fs.ErrNotExist}
+	if !oexist {
+		return &fs.PathError{Op: "renameFile", Path: pathjoin(m.root, oldpath), Err: fs.ErrNotExist}
 	}
 
-	newdir, newname := m.path(newpath)
+	newdir, newname := dirname(newpath)
 
-	nnode, _ := m.node(newdir, true)
-
-	if !nnode.existFile(newname) {
-		return &fs.PathError{Op: "renameFile", Path: path.Join(nnode.root, newname), Err: fs.ErrExist}
+	nnode, nexist := m.node(newdir, false)
+	if !nexist {
+		return &fs.PathError{Op: "renameFile", Path: pathjoin(m.root, newdir), Err: fs.ErrNotExist}
 	}
 
 	f, err := onode.removeFile(oldname)
@@ -237,26 +347,28 @@ func (m *memFs) renameFile(oldpath, newpath string) error {
 		return err
 	}
 
-	if _, err := nnode.create(newname, f); err != nil {
-		return err
-	}
+	_, _ = nnode.create(newname, f)
 	return nil
 }
 
 func (m *memFs) renameDir(oldpath, newpath string) error {
-	olddir, oldname := m.path(oldpath)
+	olddir, oldname := dirname(oldpath)
 
-	onode, exist := m.node(olddir, false)
-	if !exist {
-		return &fs.PathError{Op: "rename", Path: path.Join(onode.root, oldname), Err: fs.ErrNotExist}
+	onode, oexist := m.node(olddir, false)
+	if !oexist {
+		return &fs.PathError{Op: "renameDir", Path: pathjoin(m.root, oldname), Err: fs.ErrNotExist}
 	}
 
-	newdir, newname := m.path(newpath)
+	newdir, newname := dirname(newpath)
 
-	nnode, _ := m.node(newdir, true)
+	nnode, nexist := m.node(newdir, false)
+
+	if !nexist {
+		return &fs.PathError{Op: "renameDir", Path: pathjoin(m.root, newdir), Err: fs.ErrNotExist}
+	}
 
 	if nnode.existDir(newname) {
-		return &fs.PathError{Op: "rename", Path: path.Join(nnode.root, newname), Err: fs.ErrExist}
+		return &fs.PathError{Op: "renameDir", Path: pathjoin(m.root, newname), Err: fs.ErrExist}
 	}
 
 	dir, err := onode.removeDir(oldname)
@@ -266,9 +378,10 @@ func (m *memFs) renameDir(oldpath, newpath string) error {
 
 	dir.Lock()
 	dir.root = path.Join(dir.root, "../", newname)
+	dir.fi.name = newname
 	dir.Unlock()
 
-	nnode.RLock()
+	nnode.Lock()
 	nnode.dirs[newname] = dir
 	nnode.Unlock()
 
@@ -277,26 +390,32 @@ func (m *memFs) renameDir(oldpath, newpath string) error {
 
 func (m *memFs) existFile(file string) bool {
 	m.RLock()
-	defer m.Unlock()
+	defer m.RUnlock()
 	if _, ok := m.files[file]; ok {
 		return true
 	}
 	return false
 }
 
+func (m *memFs) getFile(file string) filesystem.File {
+	m.RLock()
+	defer m.RUnlock()
+
+	if f, ok := m.files[file]; ok {
+		return f
+
+	} else {
+		return nil
+	}
+}
+
 func (m *memFs) existDir(dir string) bool {
 	m.RLock()
-	defer m.Unlock()
+	defer m.RUnlock()
 	if _, ok := m.dirs[dir]; ok {
 		return true
 	}
 	return false
-}
-
-func (m *memFs) path(path string) (dir string, name string) {
-	dirs := strings.Split(strings.TrimRight(path, "/"), "/")
-
-	return strings.Join(dirs[:len(dirs)-1], "/"), dirs[len(dirs)-1]
 }
 
 func (m *memFs) node(dir string, autoCreate bool) (fs *memFs, exists bool) {
@@ -319,10 +438,13 @@ func (m *memFs) node(dir string, autoCreate bool) (fs *memFs, exists bool) {
 	}
 
 	for i := 0; i < len(dirs); i++ {
+		if dirs[i] == "" {
+			continue
+		}
 		node.RLock()
 		if child, ok := node.dirs[dirs[i]]; ok {
-			node = child
 			node.RUnlock()
+			node = child
 			continue
 		}
 
@@ -331,7 +453,7 @@ func (m *memFs) node(dir string, autoCreate bool) (fs *memFs, exists bool) {
 			return nil, false
 		}
 
-		child := New(m.config, m.root+dirs[i]).(*memFs)
+		child := New(m.config, node.root+dirs[i]).(*memFs)
 		child.top = top
 		node.Lock()
 
@@ -343,4 +465,17 @@ func (m *memFs) node(dir string, autoCreate bool) (fs *memFs, exists bool) {
 	}
 
 	return node, true
+}
+
+func dirname(path string) (dir string, name string) {
+	dirs := strings.Split(strings.TrimRight(path, "/"), "/")
+
+	return strings.Join(dirs[:len(dirs)-1], "/"), dirs[len(dirs)-1]
+}
+
+func pathjoin(root, dir string) string {
+	if strings.HasPrefix(dir, "/") {
+		return dir
+	}
+	return path.Join(root, dir)
 }

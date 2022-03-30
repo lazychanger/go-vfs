@@ -18,6 +18,8 @@ func newMemFile(name string, buf []byte, isDir bool) *memFile {
 	}
 }
 
+// memFile is a memory file implementation.
+// implements io.Writer, io.Reader, io.Closer, fs.FileInfo
 type memFile struct {
 	buf *bytes.Buffer
 
@@ -29,51 +31,49 @@ type memFile struct {
 func (m *memFile) Write(p []byte) (n int, err error) {
 	m.Lock()
 	defer m.Unlock()
-	return m.buf.Write(p)
+	n, err = m.buf.Write(p)
+	m.fi.ctime = time.Now()
+	m.fi.size += int64(n)
+	return
 }
 
 func (m *memFile) Stat() (fs.FileInfo, error) {
 	return m.fi, nil
 }
 
-func (m *memFile) Read(bytes []byte) (int, error) {
-	n, err := m.buf.Read(bytes)
+func (m *memFile) Read(bytes []byte) (n int, err error) {
+	m.Lock()
+	defer m.Unlock()
+	n, err = m.buf.Read(bytes)
+	m.fi.size -= int64(n)
+	m.fi.ctime = time.Now()
 
-	if n > 0 {
-		m.Lock()
-		m.fi.size -= int64(n)
-		m.Unlock()
-	}
-
-	if err != nil {
-		return n, err
-	}
-
-	return m.buf.Read(bytes)
+	return n, err
 }
 
 func (m *memFile) Close() error {
 	return nil
 }
 
-func (m *memFile) Copy() *memFile {
-	m.Lock()
-	defer m.Unlock()
+//func (m *memFile) Copy() *memFile {
+//	m.Lock()
+//	defer m.Unlock()
+//
+//	data := make([]byte, m.fi.size)
+//
+//	copy(data, m.buf.Bytes())
+//
+//	return &memFile{
+//		buf: bytes.NewBuffer(data),
+//		fi: &memFileInfo{
+//			name:  m.fi.name,
+//			size:  m.fi.size,
+//			ctime: m.fi.ctime,
+//		},
+//	}
+//}
 
-	data := make([]byte, m.fi.size)
-
-	copy(data, m.buf.Bytes())
-
-	return &memFile{
-		buf: bytes.NewBuffer(data),
-		fi: &memFileInfo{
-			name:  m.fi.name,
-			size:  m.fi.size,
-			ctime: m.fi.ctime,
-		},
-	}
-}
-
+// memDirEntry see fs.FileInfo
 type memFileInfo struct {
 	name  string
 	size  int64
@@ -103,4 +103,25 @@ func (m *memFileInfo) IsDir() bool {
 
 func (m *memFileInfo) Sys() any {
 	return nil
+}
+
+// memDirEntry see fs.DirEntry
+type memDirEntry struct {
+	fi fs.FileInfo
+}
+
+func (m *memDirEntry) Name() string {
+	return m.fi.Name()
+}
+
+func (m *memDirEntry) IsDir() bool {
+	return m.fi.IsDir()
+}
+
+func (m *memDirEntry) Type() fs.FileMode {
+	return m.fi.Mode()
+}
+
+func (m *memDirEntry) Info() (fs.FileInfo, error) {
+	return m.fi, nil
 }
