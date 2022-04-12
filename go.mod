@@ -1,4 +1,4 @@
-module github.com/lazychanger/filesystem
+module github.com/lazychanger/go-vfs
 
 go 1.18
 
