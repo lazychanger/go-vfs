@@ -3,7 +3,7 @@ package memory
 import (
 	"bytes"
 	"fmt"
-	"github.com/lazychanger/filesystem/tests"
+	"github.com/lazychanger/go-vfs/tests"
 	"github.com/stretchr/testify/assert"
 	"io"
 	"io/fs"

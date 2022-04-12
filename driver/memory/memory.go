@@ -2,7 +2,7 @@ package memory
 
 import (
 	"errors"
-	"github.com/lazychanger/filesystem"
+	"github.com/lazychanger/go-vfs"
 	"io"
 	"io/fs"
 	"path"

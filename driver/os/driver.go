@@ -1,7 +1,7 @@
 package os
 
 import (
-	"github.com/lazychanger/filesystem"
+	"github.com/lazychanger/go-vfs"
 	"net/url"
 )
 

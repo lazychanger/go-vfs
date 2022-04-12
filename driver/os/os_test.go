@@ -2,7 +2,7 @@ package os
 
 import (
 	"fmt"
-	"github.com/lazychanger/filesystem/tests"
+	"github.com/lazychanger/go-vfs/tests"
 	"github.com/stretchr/testify/assert"
 	"io/fs"
 	"os"

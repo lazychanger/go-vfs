@@ -3,7 +3,7 @@ package tests
 import (
 	"bytes"
 	"fmt"
-	"github.com/lazychanger/filesystem"
+	"github.com/lazychanger/go-vfs"
 	"github.com/stretchr/testify/assert"
 	"io/fs"
 	"sync"

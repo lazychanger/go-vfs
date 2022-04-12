@@ -2,7 +2,7 @@ package os
 
 import (
 	"errors"
-	"github.com/lazychanger/filesystem"
+	"github.com/lazychanger/go-vfs"
 	"io/fs"
 	"log"
 	"os"

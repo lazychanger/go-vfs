@@ -16,9 +16,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/lazychanger/filesystem"
-	_ "github.com/lazychanger/filesystem/driver/memory"
-	_ "github.com/lazychanger/filesystem/driver/os"
+	"github.com/lazychanger/go-vfs"
+	_ "github.com/lazychanger/go-vfs/driver/memory"
+	_ "github.com/lazychanger/go-vfs/driver/os"
 	"io"
 	"log"
 	"os"
